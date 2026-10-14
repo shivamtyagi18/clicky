@@ -28,6 +28,11 @@ This single command:
 
 - **⏹️ Instant Speech Stop Control**: Never worry about AI talking non-stop. Hit **`Esc`** at any moment or click the prominent red **`⏹️ Stop Speaking`** button to immediately silence speech via `window.speechSynthesis.cancel()`.
 - **🔊 Voice Toggle**: Switch voice output on or off with a single click.
+- **⭕ Circle Gesture Snap**: Work anywhere on your desktop without switching back to the browser. Simply draw a circular loop or lasso with your mouse over any code, window, or UI element:
+  - Plays an instant audio chime (`Pop.aiff`)
+  - Calculates the circle's exact centroid `(cx, cy)`
+  - Snaps a crisp 1280×800 crop centered directly on the circled target
+  - Pulses the Web UI preview in real time so Clicky is ready to answer questions about what you just circled
 - **🎯 Cursor-Centered Auto-Crop Perception**: Real-time foveal vision! Clicky automatically queries your macOS mouse cursor location and captures a crisp 1280×800 crop centered directly around where you're pointing. Injects relative spatial coordinates into the vision prompt and encodes spatial awareness into SMRITI. No TCC permission loops or modal crashes.
 - **📷 Full Desktop Fallback**: Toggle between Cursor-Centered Auto-Crop and Full Desktop capture with a single click.
 - **🧠 SMRITI Long-Term Memory**: Shared local memory layer (`~/.smriti/global`) connecting Clicky, Smriti Desktop App, Claude Code, Gemini CLI, and terminal agents. Every conversation turn is encoded into your memory palace and recalled in future conversations.

@@ -25,6 +25,9 @@ OLLAMA_API_URL = "http://localhost:11434"
 SCREENSHOT_PATH = "/tmp/clicky_web_screen.jpg"
 WEB_DIR = Path(__file__).parent.resolve()
 
+import math
+import time
+import threading
 import ctypes
 import ctypes.util
 
@@ -54,17 +57,163 @@ def get_mouse_location():
         print(f"⚠️ Error reading mouse location: {e}")
     return None, None
 
-def capture_screen(mode="cursor", crop_w=1280, crop_h=800):
+# Gesture detection state
+gesture_enabled = True
+last_circle_capture_time = 0.0
+last_cursor_info = None
+_gesture_thread = None
+
+def play_snap_sound():
+    """Plays standard macOS Pop chime for instant tactile audio feedback."""
+    try:
+        sound_path = "/System/Library/Sounds/Pop.aiff"
+        if os.path.exists(sound_path):
+            subprocess.Popen(["afplay", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"⚠️ Error playing snap sound: {e}")
+
+def _check_circle_slice(pts):
+    """
+    Checks if a slice of points forms a valid closed circle/loop.
+    Requires intentional gesture:
+    - Min 60px bounding box
+    - Aspect ratio between 0.45 and 2.2
+    - Closure distance < 45% of diagonal
+    - Must traverse all 4 quadrants around centroid
+    - Path length matches expected perimeter
+    - Cumulative signed angle >= 1.78 * pi (~320 degrees)
+    """
+    if len(pts) < 14:
+        return False, None, None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    w = max_x - min_x
+    h = max_y - min_y
+
+    # Intentional circle gesture size: at least 60px, up to 750px
+    if w < 60 or h < 60 or w > 750 or h > 750:
+        return False, None, None
+
+    # Elliptical aspect ratio check (not a slit)
+    aspect = w / max(h, 1)
+    if not (0.45 <= aspect <= 2.2):
+        return False, None, None
+
+    diag = math.hypot(w, h)
+    closure_dist = math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1])
+    if closure_dist > diag * 0.45:
+        return False, None, None
+
+    cx = (min_x + max_x) / 2.0
+    cy = (min_y + max_y) / 2.0
+
+    # Must visit all 4 quadrants around centroid
+    q1 = any(p[0] >= cx and p[1] >= cy for p in pts)
+    q2 = any(p[0] < cx and p[1] >= cy for p in pts)
+    q3 = any(p[0] < cx and p[1] < cy for p in pts)
+    q4 = any(p[0] >= cx and p[1] < cy for p in pts)
+    if not (q1 and q2 and q3 and q4):
+        return False, None, None
+
+    # Check path length vs perimeter
+    path_len = sum(math.hypot(pts[k+1][0] - pts[k][0], pts[k+1][1] - pts[k][1]) for k in range(len(pts)-1))
+    approx_perimeter = math.pi * ((w + h) / 2.0)
+    if path_len < approx_perimeter * 0.70 or path_len > approx_perimeter * 2.5:
+        return False, None, None
+
+    angles = [math.atan2(p[1] - cy, p[0] - cx) for p in pts]
+    signed = 0.0
+    tot_abs = 0.0
+    for j in range(len(angles) - 1):
+        da = angles[j + 1] - angles[j]
+        while da > math.pi:
+            da -= 2 * math.pi
+        while da < -math.pi:
+            da += 2 * math.pi
+        signed += da
+        tot_abs += abs(da)
+
+    if abs(signed) >= 1.78 * math.pi and tot_abs <= 3.2 * math.pi:
+        return True, cx, cy
+    return False, None, None
+
+def detect_circle_in_buffer(buffer):
+    """
+    buffer is list of (x, y, t).
+    Searches backwards from the most recent point for a complete circular lasso loop.
+    """
+    if len(buffer) < 10:
+        return False, None, None
+    now = buffer[-1][2]
+    for i in range(len(buffer) - 10, -1, -1):
+        dt = now - buffer[i][2]
+        if dt < 0.25:
+            continue
+        if dt > 1.2:
+            break
+        ok, cx, cy = _check_circle_slice(buffer[i:])
+        if ok:
+            return True, cx, cy
+    return False, None, None
+
+def _circle_gesture_loop():
+    """Background 50Hz daemon loop tracking cursor loops."""
+    global last_circle_capture_time, last_cursor_info
+    buffer = []
+    print("🌀 [Clicky Gesture] Circle trigger listener active (50Hz polling)...")
+    while True:
+        try:
+            if not gesture_enabled:
+                time.sleep(0.2)
+                buffer.clear()
+                continue
+
+            now = time.time()
+            mx, my = get_mouse_location()
+            if mx is not None and my is not None:
+                buffer.append((mx, my, now))
+                # Keep points within the last 1.3s
+                cutoff = now - 1.3
+                while buffer and buffer[0][2] < cutoff:
+                    buffer.pop(0)
+
+                # Debounce by 1.8s
+                if now - last_circle_capture_time > 1.8:
+                    detected, cx, cy = detect_circle_in_buffer(buffer)
+                    if detected:
+                        last_circle_capture_time = now
+                        buffer.clear()
+                        play_snap_sound()
+                        b64, cursor_info = capture_screen(mode="cursor", center=(int(cx), int(cy)))
+                        last_cursor_info = cursor_info
+                        print(f"🎯 [Gesture Snap] Circle detected at ({int(cx)}, {int(cy)})! Captured 1280x800 crop.")
+            time.sleep(0.02)
+        except Exception as e:
+            time.sleep(0.1)
+
+def start_gesture_listener():
+    """Starts the gesture listener in a background daemon thread."""
+    global _gesture_thread
+    if _gesture_thread is None or not _gesture_thread.is_alive():
+        _gesture_thread = threading.Thread(target=_circle_gesture_loop, daemon=True)
+        _gesture_thread.start()
+
+def capture_screen(mode="cursor", crop_w=1280, crop_h=800, center=None):
     """
     Captures screen content.
-    - mode='cursor': Captures a crisp 1280x800 crop centered directly around the mouse cursor.
+    - mode='cursor': Captures a crisp 1280x800 crop centered directly around the mouse cursor (or center=(cx, cy)).
     - mode='full': Captures full desktop and downscales to max 1280px via sips.
     Returns (base64_jpeg_string, cursor_info_dict).
     """
     try:
         cursor_info = None
         if mode == "cursor":
-            mx, my = get_mouse_location()
+            if center and center[0] is not None and center[1] is not None:
+                mx, my = int(center[0]), int(center[1])
+            else:
+                mx, my = get_mouse_location()
             if mx is not None and my is not None:
                 rx = max(0, mx - crop_w // 2)
                 ry = max(0, my - crop_h // 2)
@@ -229,7 +378,10 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 "models": models,
                 "smriti_connected": smriti_stats.get("status") == "ok",
                 "smriti_memories": smriti_stats.get("memories_count", 0),
-                "has_screenshot": os.path.exists(SCREENSHOT_PATH)
+                "has_screenshot": os.path.exists(SCREENSHOT_PATH),
+                "gesture_enabled": gesture_enabled,
+                "last_circle_capture_time": last_circle_capture_time,
+                "last_cursor_info": last_cursor_info
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -254,7 +406,28 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if self.path == "/api/capture":
+        if self.path == "/api/gesture_toggle":
+            global gesture_enabled
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > 0:
+                try:
+                    body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                    if "enabled" in body:
+                        gesture_enabled = bool(body["enabled"])
+                    else:
+                        gesture_enabled = not gesture_enabled
+                except Exception:
+                    gesture_enabled = not gesture_enabled
+            else:
+                gesture_enabled = not gesture_enabled
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"gesture_enabled": gesture_enabled}).encode("utf-8"))
+
+        elif self.path == "/api/capture":
             content_length = int(self.headers.get("Content-Length", 0))
             body = {}
             if content_length > 0:
@@ -368,6 +541,7 @@ def run_server():
     print(f"✨ Clicky Web Companion running at http://localhost:{PORT}")
     print(f"🧠 SMRITI Memory linked at {SMRITI_API_URL}")
     print(f"🦙 Ollama AI linked at {OLLAMA_API_URL}")
+    start_gesture_listener()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

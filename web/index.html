@@ -424,6 +424,16 @@
       background: #2b3347;
     }
 
+    @keyframes gesturePulse {
+      0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.9); border-color: #3b82f6; }
+      50% { box-shadow: 0 0 24px 6px rgba(59, 130, 246, 0.7); border-color: #60a5fa; }
+      100% { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); border-color: var(--card-border); }
+    }
+
+    .gesture-flash {
+      animation: gesturePulse 1.2s ease-out;
+    }
+
     /* Bottom Input Bar */
     .input-section {
       margin-top: 14px;
@@ -617,6 +627,13 @@
           <option value="full">🖥️ Full Desktop</option>
         </select>
       </div>
+      <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-muted); background: #131722; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--card-border);">
+        <label class="screen-toggle" title="Draw a circle/loop with cursor anywhere on desktop to auto-snap" style="font-size: 11px; cursor: pointer;">
+          <input type="checkbox" id="gestureSnapCheck" checked onchange="toggleGestureSnap()">
+          <span>⭕ Circle Snap</span>
+        </label>
+        <span id="gestureStatusPill" style="font-size: 10px; color: #10b981; font-weight: 600;">Active</span>
+      </div>
       <div style="position: relative;">
         <img id="screenThumb" class="screen-thumb" src="/api/screenshot" alt="Screen preview" onclick="openLightbox()" title="Click to view full screen capture" onerror="this.style.display='none'">
         <div id="cursorBadge" style="position: absolute; bottom: 6px; left: 6px; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); color: #60a5fa; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3); pointer-events: none;">
@@ -669,9 +686,32 @@
     let isRecording = false;
     let recognition = null;
     let currentModel = "mistral:latest";
+    let lastKnownGestureTime = 0;
 
     // Setup speech synthesis
     const synth = window.speechSynthesis;
+
+    async function toggleGestureSnap() {
+      const check = document.getElementById("gestureSnapCheck");
+      const pill = document.getElementById("gestureStatusPill");
+      try {
+        const res = await fetch("/api/gesture_toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: check.checked })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          check.checked = data.gesture_enabled;
+          if (pill) {
+            pill.textContent = data.gesture_enabled ? "Active" : "Disabled";
+            pill.style.color = data.gesture_enabled ? "#10b981" : "var(--text-dim)";
+          }
+        }
+      } catch (e) {
+        console.error("Failed to toggle gesture:", e);
+      }
+    }
 
     // Check & Load Status
     async function loadStatus() {
@@ -705,9 +745,35 @@
           });
         }
 
-        // Show screen thumbnail if available
-        if (data.has_screenshot) {
-          refreshScreenThumb();
+        // Update gesture toggle
+        if (data.gesture_enabled !== undefined) {
+          const check = document.getElementById("gestureSnapCheck");
+          const pill = document.getElementById("gestureStatusPill");
+          if (check) check.checked = data.gesture_enabled;
+          if (pill) {
+            pill.textContent = data.gesture_enabled ? "Active" : "Disabled";
+            pill.style.color = data.gesture_enabled ? "#10b981" : "var(--text-dim)";
+          }
+        }
+
+        // Trigger flash and refresh if new gesture capture occurred
+        if (data.last_circle_capture_time && data.last_circle_capture_time > lastKnownGestureTime) {
+          const isInitial = (lastKnownGestureTime === 0);
+          lastKnownGestureTime = data.last_circle_capture_time;
+          if (!isInitial) {
+            refreshScreenThumb(data.last_cursor_info);
+            const widget = document.getElementById("screenWidget");
+            if (widget) {
+              widget.classList.remove("gesture-flash");
+              void widget.offsetWidth;
+              widget.classList.add("gesture-flash");
+            }
+          }
+        }
+
+        // Show screen thumbnail if available on initial load
+        if (data.has_screenshot && lastKnownGestureTime === 0) {
+          refreshScreenThumb(data.last_cursor_info);
         }
       } catch (e) {
         console.error("Status check failed:", e);
@@ -1062,7 +1128,7 @@
     // Init
     setupSpeechRecognition();
     loadStatus();
-    setInterval(loadStatus, 10000);
+    setInterval(loadStatus, 1500);
   </script>
 </body>
 </html>
