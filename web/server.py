@@ -450,6 +450,15 @@ def query_openai(model, system_prompt, user_prompt, image_b64=None, api_key=None
             return choices[0].get("message", {}).get("content", "")
         return ""
 
+def is_model_vision(model_name):
+    """Returns True if the model has multimodal vision capabilities."""
+    name = (model_name or "").lower()
+    if any(k in name for k in ["claude-3-5", "claude-3-opus", "gemini", "gpt-4o", "gpt-4-turbo"]):
+        return True
+    if any(k in name for k in ["vision", "vl", "pixtral", "llava", "minicpm", "moondream", "bakllava", "qwen3.5"]):
+        return True
+    return False
+
 def get_ollama_models():
     """Gets available models from local Ollama."""
     try:
@@ -461,46 +470,34 @@ def get_ollama_models():
         return []
 
 def query_ollama(model, system_prompt, user_prompt, image_b64=None):
-    """Sends chat completion request to Ollama."""
+    """Sends chat completion request to Ollama using native /api/chat with multimodal image support."""
     messages = [
         {"role": "system", "content": system_prompt}
     ]
 
-    is_vision = any(k in model.lower() for k in ["vision", "vl", "pixtral", "llava", "qwen3.5", "minicpm"])
-    
+    is_vision = is_model_vision(model)
+    user_msg = {"role": "user", "content": user_prompt}
     if is_vision and image_b64:
-        content_blocks = [
-            {"type": "text", "text": user_prompt},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
-            }
-        ]
-        messages.append({"role": "user", "content": content_blocks})
-    else:
-        full_text = user_prompt
-        if image_b64 and not is_vision:
-            full_text += "\n[Note: User has their screen captured, but current model is text-only. Answer based on question and context.]"
-        messages.append({"role": "user", "content": full_text})
+        user_msg["images"] = [image_b64]
+    messages.append(user_msg)
 
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "temperature": 0.7
+        "options": {
+            "temperature": 0.7
+        }
     }
 
     req = urllib.request.Request(
-        f"{OLLAMA_API_URL}/v1/chat/completions",
+        f"{OLLAMA_API_URL}/api/chat",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=180) as resp:
         res = json.loads(resp.read().decode("utf-8"))
-        choices = res.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "")
-        return ""
+        return res.get("message", {}).get("content", "")
 
 class ClickyWebHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -691,9 +688,16 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Empty prompt"}).encode("utf-8"))
                 return
 
-            # Capture screen if requested and not provided manually
+            # If screen requested, use current intentional snapshot or capture fresh
             if include_screen and not image_b64:
-                image_b64, cursor_info = capture_screen(mode=capture_mode)
+                # Prioritize existing intentional snapshot (from circle gesture or snap button)
+                # to prevent overwriting user's target with a capture of the Clicky web chat window
+                if os.path.exists(SCREENSHOT_PATH) and os.path.getsize(SCREENSHOT_PATH) > 0 and (last_circle_capture_time > 0 or last_cursor_info):
+                    with open(SCREENSHOT_PATH, "rb") as f:
+                        image_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    cursor_info = last_cursor_info or {"mode": "snapshot"}
+                else:
+                    image_b64, cursor_info = capture_screen(mode=capture_mode)
 
             # Recall from SMRITI
             memories = query_smriti_recall(prompt, limit=4)
@@ -721,6 +725,11 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 f"Keep responses conversational and readable."
             ) + cursor_context + recalled_context
 
+            is_vision = is_model_vision(model)
+            text_model_warning = ""
+            if include_screen and not is_vision:
+                text_model_warning = f"⚠️ [Notice: '{model}' is a text-only model and cannot view images. To analyze what's on your screen, select a Vision model like Gemini 2.0 Flash, Claude 3.5 Sonnet, or GPT-4o in the top dropdown.]\n\n"
+
             try:
                 # Dispatch to appropriate provider
                 if model.startswith("claude-"):
@@ -733,6 +742,9 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                     reply = query_ollama(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
                     if not reply:
                         reply = "I received your message, but didn't get a response from the model. Make sure Ollama is running."
+
+                if text_model_warning:
+                    reply = text_model_warning + reply
 
                 # Encode exchange to SMRITI
                 spatial_tag = f" [Cursor at ({cursor_info['global_x']}, {cursor_info['global_y']})]" if (cursor_info and "global_x" in cursor_info) else ""

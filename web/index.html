@@ -654,6 +654,10 @@
         </label>
         <span id="gestureStatusPill" style="font-size: 10px; color: #10b981; font-weight: 600;">Active</span>
       </div>
+      <div id="visionModelBadge" style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 4px 8px; border-radius: 6px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); color: #f59e0b;">
+        <span id="visionModelText">⚠️ "mistral:latest" is text-only</span>
+        <span style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;" onclick="document.getElementById('modelSelect').focus()">Change ↗</span>
+      </div>
       <div style="position: relative;">
         <img id="screenThumb" class="screen-thumb" src="/api/screenshot" alt="Screen preview" onclick="openLightbox()" title="Click to view full screen capture" onerror="this.style.display='none'">
         <div id="cursorBadge" style="position: absolute; bottom: 6px; left: 6px; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); color: #60a5fa; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3); pointer-events: none;">
@@ -974,13 +978,47 @@
         if (data.has_screenshot && lastKnownGestureTime === 0) {
           refreshScreenThumb(data.last_cursor_info);
         }
+
+        // Update vision indicator
+        updateVisionBadge();
       } catch (e) {
         console.error("Status check failed:", e);
       }
     }
 
+    function isModelVision(modelName) {
+      const name = (modelName || "").toLowerCase();
+      if (name.includes("claude-3-5") || name.includes("claude-3-opus") || name.includes("gemini") || name.includes("gpt-4o") || name.includes("gpt-4-turbo")) {
+        return true;
+      }
+      if (name.includes("vision") || name.includes("vl") || name.includes("pixtral") || name.includes("llava") || name.includes("minicpm") || name.includes("moondream") || name.includes("bakllava") || name.includes("qwen3.5")) {
+        return true;
+      }
+      return false;
+    }
+
+    function updateVisionBadge() {
+      const isVision = isModelVision(currentModel);
+      const badge = document.getElementById("visionModelBadge");
+      const text = document.getElementById("visionModelText");
+      if (!badge || !text) return;
+
+      if (isVision) {
+        badge.style.background = "rgba(16, 185, 129, 0.12)";
+        badge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+        badge.style.color = "#10b981";
+        text.textContent = `👁️ ${currentModel} (Vision Ready)`;
+      } else {
+        badge.style.background = "rgba(245, 158, 11, 0.12)";
+        badge.style.borderColor = "rgba(245, 158, 11, 0.3)";
+        badge.style.color = "#f59e0b";
+        text.textContent = `⚠️ ${currentModel} is text-only`;
+      }
+    }
+
     function onModelChange() {
       currentModel = document.getElementById("modelSelect").value;
+      updateVisionBadge();
       if (currentModel.startsWith("claude-") && !configuredKeys.anthropic) {
         openSettingsModal("Please add your Anthropic API Key below to use Claude models.");
       } else if (currentModel.startsWith("gemini-") && !configuredKeys.gemini) {
