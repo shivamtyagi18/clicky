@@ -332,6 +332,27 @@
       cursor: pointer;
     }
 
+    /* Web Search Badges */
+    .web-badge {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.28);
+      color: #6ee7b7;
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-size: 11px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+
+    .web-badge:hover {
+      background: rgba(16, 185, 129, 0.16);
+    }
+
     /* Code Blocks in Responses */
     pre {
       background: #0d1117;
@@ -636,7 +657,7 @@
     <div class="screen-widget" id="screenWidget">
       <div class="screen-widget-header">
         <label class="screen-toggle">
-          <input type="checkbox" id="includeScreenCheck" checked>
+          <input type="checkbox" id="includeScreenCheck" checked onchange="if(document.getElementById('bottomScreenCheck')) document.getElementById('bottomScreenCheck').checked = this.checked">
           <span>See Screen</span>
         </label>
         <button class="snap-btn" onclick="captureNewScreen()" title="Snap updated screen image">📷 Snap</button>
@@ -673,11 +694,12 @@
         <div class="message-row assistant">
           <div class="message-avatar">⚡</div>
           <div class="message-bubble">
-            <strong>Hey! I'm Clicky.</strong> I'm running locally on your Mac with <strong>SMRITI long-term memory</strong> and screen awareness.<br><br>
+            <strong>Hey! I'm Clicky.</strong> I'm running locally on your Mac with <strong>SMRITI long-term memory</strong>, live <strong>internet search</strong>, and screen awareness.<br><br>
             • Click the <strong>🎙️ Mic</strong> button or hold space to speak.<br>
             • Whenever I speak, click the big red <strong>⏹️ Stop Speaking</strong> button or press <strong>Esc</strong> to silence me immediately.<br>
+            • I have real-time <strong>🌐 Web Search</strong> enabled to fetch current facts, documentation, and news.<br>
             • I can see your screen whenever "See Screen" is checked.
-            <div class="message-meta">Ready • Local Ollama + SMRITI</div>
+            <div class="message-meta">Ready • Local Ollama + SMRITI + Web Search</div>
           </div>
         </div>
       </div>
@@ -685,6 +707,21 @@
       <!-- Input Area -->
       <div class="input-section">
         <div id="liveTranscript" class="live-transcript">Listening...</div>
+        <div class="input-toolbar" style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 2px 4px 6px 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 4px;">
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <label class="screen-toggle" style="cursor: pointer;" title="Enable real-time internet search via DuckDuckGo">
+              <input type="checkbox" id="searchWebCheck" checked>
+              <span style="font-weight: 500; color: #6ee7b7;">🌐 Search Web</span>
+            </label>
+            <label class="screen-toggle" style="cursor: pointer;" title="Include screen snapshot with your message">
+              <input type="checkbox" id="bottomScreenCheck" checked onchange="document.getElementById('includeScreenCheck').checked = this.checked">
+              <span>👁️ See Screen</span>
+            </label>
+          </div>
+          <div id="searchIndicator" style="font-size: 10px; color: #10b981; display: none; align-items: center; gap: 4px;">
+            <span>🌐 Searching web...</span>
+          </div>
+        </div>
         <div class="input-row">
           <button id="voiceBtn" class="voice-btn" onclick="toggleVoiceRecording()" title="Click to speak (Web Speech API)">
             🎙️
@@ -753,6 +790,18 @@
         </div>
       </div>
 
+      <!-- Tavily AI Search Key (Optional) -->
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600;">
+          <span style="color: #6ee7b7;">🌐 Tavily AI Search (Optional)</span>
+          <span id="tavilyBadge" style="font-size: 10px; color: #10b981;">DuckDuckGo Active (Default)</span>
+        </div>
+        <input type="password" id="tavilyKeyInput" placeholder="tvly-..." style="background: #10141e; border: 1px solid var(--card-border); border-radius: 8px; color: #fff; padding: 8px 12px; font-size: 13px; outline: none; font-family: monospace;" />
+        <div style="font-size: 11px; color: var(--text-dim);">
+          DuckDuckGo search works with zero keys. Add Tavily for deep AI search • <a href="https://tavily.com" target="_blank" style="color: #60a5fa; text-decoration: none;">Get free key ↗</a>
+        </div>
+      </div>
+
       <!-- Buttons -->
       <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px;">
         <button onclick="closeSettingsModal()" class="snap-btn" style="padding: 8px 16px;">Cancel</button>
@@ -773,7 +822,8 @@
     let configuredKeys = {
       anthropic: false,
       gemini: false,
-      openai: false
+      openai: false,
+      tavily: false
     };
 
     // Setup speech synthesis
@@ -797,10 +847,12 @@
           configuredKeys.anthropic = data.has_anthropic;
           configuredKeys.gemini = data.has_gemini;
           configuredKeys.openai = data.has_openai;
+          configuredKeys.tavily = data.has_tavily;
 
           const antBadge = document.getElementById("anthropicBadge");
           const gemBadge = document.getElementById("geminiBadge");
           const oaiBadge = document.getElementById("openaiBadge");
+          const tavBadge = document.getElementById("tavilyBadge");
 
           antBadge.textContent = data.has_anthropic ? "✓ " + (data.masked.anthropic || "Active") : "Not Set";
           antBadge.style.color = data.has_anthropic ? "#10b981" : "var(--text-dim)";
@@ -810,6 +862,11 @@
 
           oaiBadge.textContent = data.has_openai ? "✓ " + (data.masked.openai || "Active") : "Not Set";
           oaiBadge.style.color = data.has_openai ? "#10b981" : "var(--text-dim)";
+
+          if (tavBadge) {
+            tavBadge.textContent = data.has_tavily ? "✓ " + (data.masked.tavily || "Active") : "DuckDuckGo Active (Default)";
+            tavBadge.style.color = "#10b981";
+          }
         }
       } catch (e) {
         console.error("Failed to load keys status:", e);
@@ -826,6 +883,7 @@
       const antKey = document.getElementById("anthropicKeyInput").value.trim();
       const gemKey = document.getElementById("geminiKeyInput").value.trim();
       const oaiKey = document.getElementById("openaiKeyInput").value.trim();
+      const tavKey = document.getElementById("tavilyKeyInput").value.trim();
       const saveBtn = document.getElementById("saveKeysBtn");
       const statusEl = document.getElementById("saveKeysStatus");
 
@@ -836,6 +894,7 @@
       if (antKey) keysPayload.anthropic = antKey;
       if (gemKey) keysPayload.gemini = gemKey;
       if (oaiKey) keysPayload.openai = oaiKey;
+      if (tavKey) keysPayload.tavily = tavKey;
 
       try {
         const res = await fetch("/api/keys", {
@@ -848,14 +907,17 @@
           configuredKeys.anthropic = data.has_anthropic;
           configuredKeys.gemini = data.has_gemini;
           configuredKeys.openai = data.has_openai;
+          configuredKeys.tavily = data.has_tavily;
 
           document.getElementById("anthropicKeyInput").value = "";
           document.getElementById("geminiKeyInput").value = "";
           document.getElementById("openaiKeyInput").value = "";
+          document.getElementById("tavilyKeyInput").value = "";
 
           const antBadge = document.getElementById("anthropicBadge");
           const gemBadge = document.getElementById("geminiBadge");
           const oaiBadge = document.getElementById("openaiBadge");
+          const tavBadge = document.getElementById("tavilyBadge");
 
           antBadge.textContent = data.has_anthropic ? "✓ " + (data.masked.anthropic || "Active") : "Not Set";
           antBadge.style.color = data.has_anthropic ? "#10b981" : "var(--text-dim)";
@@ -865,6 +927,11 @@
 
           oaiBadge.textContent = data.has_openai ? "✓ " + (data.masked.openai || "Active") : "Not Set";
           oaiBadge.style.color = data.has_openai ? "#10b981" : "var(--text-dim)";
+
+          if (tavBadge) {
+            tavBadge.textContent = data.has_tavily ? "✓ " + (data.masked.tavily || "Active") : "DuckDuckGo Active (Default)";
+            tavBadge.style.color = "#10b981";
+          }
 
           statusEl.textContent = "✓ Keys saved securely to ~/.clicky_keys.json";
           statusEl.style.color = "#10b981";
@@ -1231,7 +1298,7 @@
       }
     }
 
-    function appendMessage(role, text, memories = []) {
+    function appendMessage(role, text, memories = [], webResults = []) {
       const container = document.getElementById("messagesContainer");
       const row = document.createElement("div");
       row.className = `message-row ${role}`;
@@ -1252,11 +1319,44 @@
         bubble.appendChild(memBadge);
       }
 
-      // Format markdown-like code blocks and newlines
-      const formatted = escapeHtml(text)
-        .replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>")
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        .replace(/\n/g, "<br>");
+      // Render web search sources if any
+      if (webResults && webResults.length > 0) {
+        const webBadge = document.createElement("div");
+        webBadge.className = "web-badge";
+        const sourcesHtml = webResults.map((r, i) => `
+          <div style="margin-top: 6px; padding-left: 8px; border-left: 2px solid rgba(16, 185, 129, 0.6);">
+            <div><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">${escapeHtml(r.title)}</a></div>
+            <div style="color: var(--text-muted); font-size: 10px; margin-top: 2px; line-height: 1.35;">${escapeHtml(r.snippet ? (r.snippet.slice(0, 160) + (r.snippet.length > 160 ? '...' : '')) : '')}</div>
+          </div>
+        `).join("");
+
+        webBadge.innerHTML = `
+          <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+            <span>🌐 <strong>Found ${webResults.length} real-time web sources</strong></span>
+            <span class="web-badge-arrow" style="font-size: 10px; opacity: 0.8; color: #10b981;">▼ View Sources</span>
+          </div>
+          <div class="web-sources-dropdown" style="display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(16, 185, 129, 0.2);">
+            ${sourcesHtml}
+          </div>
+        `;
+        webBadge.onclick = (e) => {
+          if (e.target.tagName === 'A') return;
+          const dropdown = webBadge.querySelector(".web-sources-dropdown");
+          const arrow = webBadge.querySelector(".web-badge-arrow");
+          const isHidden = dropdown.style.display === "none";
+          dropdown.style.display = isHidden ? "block" : "none";
+          arrow.textContent = isHidden ? "▲ Hide Sources" : "▼ View Sources";
+        };
+        bubble.appendChild(webBadge);
+      }
+
+      // Format markdown-like code blocks, links, bold, and newlines
+      let formatted = escapeHtml(text);
+      formatted = formatted.replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+      formatted = formatted.replace(/`([^`]+)`/g, "<code>$1</code>");
+      formatted = formatted.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline;">$1</a>');
+      formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      formatted = formatted.replace(/\n/g, "<br>");
 
       const contentDiv = document.createElement("div");
       contentDiv.innerHTML = formatted;
@@ -1314,16 +1414,22 @@
 
       const sendBtn = document.getElementById("sendBtn");
       const includeScreen = document.getElementById("includeScreenCheck").checked;
+      const searchWeb = document.getElementById("searchWebCheck") ? document.getElementById("searchWebCheck").checked : true;
 
       // Add loading row
       const container = document.getElementById("messagesContainer");
       const loadingRow = document.createElement("div");
       loadingRow.className = "message-row assistant";
       loadingRow.id = "loadingRow";
+      const taskDetails = [
+        searchWeb ? "searching web" : "",
+        "consulting SMRITI",
+        includeScreen ? "analyzing screen" : ""
+      ].filter(Boolean).join(" & ");
       loadingRow.innerHTML = `
         <div class="message-avatar">⚡</div>
         <div class="message-bubble" style="color: var(--text-dim); font-style: italic;">
-          Thinking & consulting SMRITI${includeScreen ? " (analyzing screen)" : ""}...
+          Thinking (${taskDetails})...
         </div>
       `;
       container.appendChild(loadingRow);
@@ -1334,11 +1440,12 @@
           const res = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: json_payload = JSON.stringify({
+            body: JSON.stringify({
               prompt: text,
               model: currentModel,
               include_screen: includeScreen,
-              capture_mode: captureMode
+              capture_mode: captureMode,
+              search_web: searchWeb
             })
           });
 
@@ -1348,17 +1455,17 @@
 
           if (res.ok) {
             const data = await res.json();
-            appendMessage("assistant", data.reply, data.recalled_memories);
+            appendMessage("assistant", data.reply, data.recalled_memories, data.web_results);
             speakText(data.reply);
             if (data.has_screenshot) {
               refreshScreenThumb(data.cursor_info);
             }
             // Refresh SMRITI count
             loadStatus();
-        } else {
-          const err = await res.json();
-          appendMessage("assistant", `⚠️ Error: ${err.error || "Failed to get response"}`);
-        }
+          } else {
+            const err = await res.json();
+            appendMessage("assistant", `⚠️ Error: ${err.error || "Failed to get response"}`);
+          }
       } catch (e) {
         const row = document.getElementById("loadingRow");
         if (row) row.remove();

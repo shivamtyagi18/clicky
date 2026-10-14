@@ -15,6 +15,9 @@ import base64
 import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
+import re
+import html
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -286,13 +289,14 @@ def get_api_keys():
     keys = {
         "anthropic": os.environ.get("ANTHROPIC_API_KEY", "").strip(),
         "gemini": os.environ.get("GEMINI_API_KEY", "").strip(),
-        "openai": os.environ.get("OPENAI_API_KEY", "").strip()
+        "openai": os.environ.get("OPENAI_API_KEY", "").strip(),
+        "tavily": os.environ.get("TAVILY_API_KEY", "").strip()
     }
     if KEYS_FILE.exists():
         try:
             with open(KEYS_FILE, "r") as f:
                 data = json.load(f)
-                for provider in ["anthropic", "gemini", "openai"]:
+                for provider in ["anthropic", "gemini", "openai", "tavily"]:
                     if data.get(provider) and not keys[provider]:
                         keys[provider] = data[provider].strip()
         except Exception as e:
@@ -327,6 +331,160 @@ def mask_key(key):
     if not key or len(key) < 8:
         return ""
     return key[:6] + "..." + key[-4:]
+
+def search_duckduckgo_lite(query, max_results=5):
+    """
+    Performs fast, zero-dependency web search via DuckDuckGo Lite.
+    Parses direct titles, URLs, and snippet texts.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = urllib.parse.urlencode({"q": query}).encode("utf-8")
+    req = urllib.request.Request("https://lite.duckduckgo.com/lite/", data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        print(f"⚠️ DuckDuckGo Lite search error: {e}")
+        return []
+
+    links = re.findall(r'<a rel=\"nofollow\" href=\"([^\"]+)\" class=[\x27\"]result-link[\x27\"]>([\s\S]*?)</a>', raw_html)
+    snippets = re.findall(r'<td class=[\x27\"]result-snippet[\x27\"]>([\s\S]*?)</td>', raw_html)
+
+    results = []
+    for i in range(min(len(links), len(snippets))):
+        if len(results) >= max_results:
+            break
+        raw_url = links[i][0]
+        if "uddg=" in raw_url:
+            m = re.search(r"uddg=([^&]+)", raw_url)
+            url = urllib.parse.unquote(m.group(1)) if m else raw_url
+        else:
+            url = raw_url
+        # Filter sponsored / ad links
+        if any(ad in url for ad in ["duckduckgo.com/y.js", "bing.com/aclick", "ad_provider="]):
+            continue
+        title = re.sub(r"<[^>]+>", "", html.unescape(links[i][1])).strip()
+        snippet = re.sub(r"<[^>]+>", "", html.unescape(snippets[i])).strip()
+        if title and url and not title.lower().startswith("ad "):
+            results.append({"title": title, "url": url, "snippet": snippet})
+    return results
+
+def search_duckduckgo_html(query, max_results=5):
+    """Fallback search via DuckDuckGo HTML endpoint."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        print(f"⚠️ DuckDuckGo HTML search error: {e}")
+        return []
+
+    snippets = re.findall(r'<a class=\"result__snippet\"[^\"]*href=\"([^\"]*)\"[^>]*>([\s\S]*?)</a>', raw_html)
+    results = []
+    for link, snip in snippets:
+        if len(results) >= max_results:
+            break
+        if "uddg=" in link:
+            m = re.search(r"uddg=([^&]+)", link)
+            url = urllib.parse.unquote(m.group(1)) if m else link
+        else:
+            url = link
+        if any(ad in url for ad in ["duckduckgo.com/y.js", "bing.com/aclick", "ad_provider="]):
+            continue
+        snippet_text = re.sub(r"<[^>]+>", "", html.unescape(snip)).strip()
+        title = snippet_text[:60] + "..." if len(snippet_text) > 60 else snippet_text
+        if url:
+            results.append({"title": title, "url": url, "snippet": snippet_text})
+    return results
+
+def search_tavily(query, api_key, max_results=5):
+    """Optional high-precision AI search via Tavily API if configured."""
+    try:
+        payload = {
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": max_results,
+            "include_answer": True
+        }
+        req = urllib.request.Request(
+            "https://api.tavily.com/search",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            results = []
+            if data.get("answer"):
+                results.append({"title": "Direct AI Answer", "url": "https://tavily.com", "snippet": data["answer"]})
+            for r in data.get("results", [])[:max_results]:
+                results.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": r.get("content", "")
+                })
+            return results
+    except Exception as e:
+        print(f"⚠️ Tavily search error: {e}")
+        return []
+
+def search_web(query, max_results=5):
+    """
+    Main web search orchestrator.
+    Prioritizes Tavily if key exists, otherwise utilizes zero-dependency DuckDuckGo Lite with HTML fallback.
+    """
+    if not query or not query.strip():
+        return []
+    clean_query = query.strip()
+    keys = get_api_keys()
+    if keys.get("tavily"):
+        res = search_tavily(clean_query, keys["tavily"], max_results=max_results)
+        if res:
+            return res
+
+    res = search_duckduckgo_lite(clean_query, max_results=max_results)
+    if not res:
+        res = search_duckduckgo_html(clean_query, max_results=max_results)
+    return res
+
+def should_search_web(prompt, force=False):
+    """Determines whether real-time internet search should be invoked for a prompt."""
+    if force:
+        return True
+    p = prompt.strip().lower()
+    if p in ["hi", "hello", "hey", "sup", "yo", "thanks", "thank you", "bye", "good morning", "good evening"]:
+        return False
+    search_triggers = [
+        "search", "google", "look up", "browse", "find out", "latest", "news", "recent",
+        "current", "today", "update", "release", "price", "who is", "who won", "what is",
+        "when did", "when is", "where is", "how much", "weather", "stock", "version", "docs", "documentation"
+    ]
+    if any(trigger in p for trigger in search_triggers) or "?" in p:
+        return True
+    return False
+
+def extract_search_query(prompt):
+    """Strips conversational prefixes to extract an optimal search query."""
+    q = prompt.strip()
+    prefixes = [
+        "can you search the web for", "can you search internet for", "search the web for",
+        "search the internet for", "search web for", "search internet for", "search for",
+        "look up on the web", "look up on web", "look up", "google for", "google",
+        "browse for", "can you search for", "please search for", "find information on",
+        "tell me about the latest", "what is the latest on", "what are the latest"
+    ]
+    for prefix in prefixes:
+        if q.lower().startswith(prefix):
+            q = q[len(prefix):].strip(" :?,.")
+            break
+    return q or prompt
 
 def query_anthropic(model, system_prompt, user_prompt, image_b64=None, api_key=None):
     """Sends chat completion request to Anthropic Messages API."""
@@ -553,7 +711,9 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 "last_cursor_info": last_cursor_info,
                 "has_anthropic": bool(keys.get("anthropic")),
                 "has_gemini": bool(keys.get("gemini")),
-                "has_openai": bool(keys.get("openai"))
+                "has_openai": bool(keys.get("openai")),
+                "has_tavily": bool(keys.get("tavily")),
+                "web_search_available": True
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -567,10 +727,12 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 "has_anthropic": bool(keys.get("anthropic")),
                 "has_gemini": bool(keys.get("gemini")),
                 "has_openai": bool(keys.get("openai")),
+                "has_tavily": bool(keys.get("tavily")),
                 "masked": {
                     "anthropic": mask_key(keys.get("anthropic", "")),
                     "gemini": mask_key(keys.get("gemini", "")),
-                    "openai": mask_key(keys.get("openai", ""))
+                    "openai": mask_key(keys.get("openai", "")),
+                    "tavily": mask_key(keys.get("tavily", ""))
                 }
             }
             self.send_response(200)
@@ -632,10 +794,12 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 "has_anthropic": bool(keys.get("anthropic")),
                 "has_gemini": bool(keys.get("gemini")),
                 "has_openai": bool(keys.get("openai")),
+                "has_tavily": bool(keys.get("tavily")),
                 "masked": {
                     "anthropic": mask_key(keys.get("anthropic", "")),
                     "gemini": mask_key(keys.get("gemini", "")),
-                    "openai": mask_key(keys.get("openai", ""))
+                    "openai": mask_key(keys.get("openai", "")),
+                    "tavily": mask_key(keys.get("tavily", ""))
                 }
             }
             self.send_response(200)
@@ -643,6 +807,27 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             self.send_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(data).encode("utf-8"))
+
+        elif self.path == "/api/search":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = {}
+            if content_length > 0:
+                try:
+                    body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+            query = body.get("query", "").strip()
+            max_results = int(body.get("max_results", 5))
+            results = search_web(query, max_results=max_results) if query else []
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "query": query,
+                "results": results
+            }).encode("utf-8"))
 
         elif self.path == "/api/capture":
             content_length = int(self.headers.get("Content-Length", 0))
@@ -677,6 +862,7 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             model = body.get("model", "mistral:latest")
             include_screen = body.get("include_screen", True)
             capture_mode = body.get("capture_mode", "cursor")
+            search_web_enabled = body.get("search_web", True)
             image_b64 = body.get("image_b64")
             cursor_info = body.get("cursor_info")
 
@@ -707,6 +893,26 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                     [f"- {m.get('content', '')}" for m in memories]
                 )
 
+            # Live Internet Search
+            web_results = []
+            web_context = ""
+            if search_web_enabled and should_search_web(prompt):
+                search_query = extract_search_query(prompt)
+                try:
+                    web_results = search_web(search_query, max_results=5)
+                    if web_results:
+                        sources_formatted = "\n\n".join([
+                            f"Source [{i+1}]: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}"
+                            for i, r in enumerate(web_results)
+                        ])
+                        web_context = (
+                            f"\n\n[LIVE REAL-TIME INTERNET SEARCH RESULTS for '{search_query}']:\n"
+                            f"{sources_formatted}\n\n"
+                            f"Instructions for Web Search: Ground your answer in the real-time search results above when discussing current events, news, documentation, or facts. Cite your sources naturally with Markdown links [Source Title](URL)."
+                        )
+                except Exception as se:
+                    print(f"⚠️ Web search error: {se}")
+
             # Spatial cursor context
             cursor_context = ""
             if cursor_info and cursor_info.get("mode") == "cursor":
@@ -718,12 +924,12 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
 
             now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
             system_prompt = (
-                f"You are Clicky, a friendly, intelligent AI companion with persistent long-term memory via SMRITI.\n"
+                f"You are Clicky, a friendly, intelligent AI companion with real-time web access and persistent long-term memory via SMRITI.\n"
                 f"Today is: {now_str}.\n"
                 f"You can see what the user is working on if a screen capture is attached.\n"
                 f"Be direct, insightful, and clear. If referring to code or visual elements on screen, describe them precisely.\n"
                 f"Keep responses conversational and readable."
-            ) + cursor_context + recalled_context
+            ) + cursor_context + recalled_context + web_context
 
             is_vision = is_model_vision(model)
             text_model_warning = ""
@@ -748,13 +954,15 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
 
                 # Encode exchange to SMRITI
                 spatial_tag = f" [Cursor at ({cursor_info['global_x']}, {cursor_info['global_y']})]" if (cursor_info and "global_x" in cursor_info) else ""
-                encode_text = f"User asked: {prompt}{spatial_tag}\nClicky answered: {reply[:300]}"
+                web_tag = f" [Consulted {len(web_results)} web sources]" if web_results else ""
+                encode_text = f"User asked: {prompt}{spatial_tag}{web_tag}\nClicky answered: {reply[:300]}"
                 encode_smriti_memory(encode_text, modality="text")
 
                 response_data = {
                     "reply": reply,
                     "model": model,
                     "recalled_memories": memories,
+                    "web_results": web_results,
                     "has_screenshot": image_b64 is not None,
                     "cursor_info": cursor_info
                 }
