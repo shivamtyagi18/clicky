@@ -75,14 +75,16 @@ class SMRITIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         check_and_reload_palace()
-        if self.path == "/health":
+        if self.path in ("/", "/health", "/status"):
             # Check if smriti is initialized and return stats
             try:
                 mem_count = len(smriti_instance.palace.memories)
                 self._send_response(200, {
                     "status": "ok",
+                    "service": "SMRITI Local Memory Core",
                     "memories_count": mem_count,
-                    "storage_path": smriti_instance.config.storage_path
+                    "storage_path": smriti_instance.config.storage_path,
+                    "clicky_companion_ui": "http://localhost:7800"
                 })
             except Exception as e:
                 self._send_response(500, {"error": f"Failed to get stats: {e}"})
