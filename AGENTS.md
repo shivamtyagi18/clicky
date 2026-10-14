@@ -14,8 +14,7 @@ All local AI chat is powered by Ollama (Mistral, Qwen 3.5 Vision, etc.) with zer
 - **App Type**: Localhost Web Application (`http://localhost:7800`)
 - **Backend**: Python 3 standard library (`http.server`, `urllib`, `subprocess`, `json`) — zero external pip packages required for the web server
 - **Frontend**: Clean single-page dark UI (`web/index.html`) using HTML5, CSS3, and modern vanilla JavaScript
-- **AI Chat**: Local Ollama (port `11434`) supporting `mistral:latest` (default fast text model), `qwen3.5:latest` (multimodal vision), and custom Ollama models
-- **Screen Perception**: Native macOS silent CLI (`screencapture -x -t jpg`) combined with `sips -Z 1280` downscaling to eliminate TCC permission friction and slash vision token latency
+- **Screen Perception**: Native macOS silent CLI (`screencapture`) with permission-free CoreGraphics cursor coordinate detection and 1280x800 auto-crop centered directly on the mouse cursor. Slashes vision token compute, eliminates TCC permission friction, and injects spatial awareness into SMRITI and vision prompts.
 - **Speech-to-Text**: Browser Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`) with real-time live transcript preview
 - **Text-to-Speech**: Browser Web Speech Synthesis (`SpeechSynthesisUtterance`) with guaranteed immediate cancellation via `window.speechSynthesis.cancel()` triggered by the red `[⏹️ Stop Speaking]` button or `Esc` key
 - **LTM Memory**: Shared local-first memory via SMRITI core HTTP REST API (`localhost:7798`) reading and writing to `~/.smriti/global`

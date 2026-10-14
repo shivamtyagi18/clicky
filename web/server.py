@@ -25,20 +25,77 @@ OLLAMA_API_URL = "http://localhost:11434"
 SCREENSHOT_PATH = "/tmp/clicky_web_screen.jpg"
 WEB_DIR = Path(__file__).parent.resolve()
 
-def capture_screen():
-    """Captures the active screen silently using native macOS screencapture CLI."""
+import ctypes
+import ctypes.util
+
+# CoreGraphics binding for instantaneous, permission-free mouse location
+_core_graphics = None
+class _CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+def get_mouse_location():
+    """Returns the current global (x, y) coordinates of the mouse cursor on macOS."""
+    global _core_graphics
     try:
-        # -x: mute sound, -t jpg: save as JPEG
-        subprocess.run(["screencapture", "-x", "-t", "jpg", SCREENSHOT_PATH], check=True, capture_output=True)
-        # Downscale retina capture to max 1280px to slash vision tokens and avoid timeouts
-        subprocess.run(["sips", "-Z", "1280", SCREENSHOT_PATH], capture_output=True)
+        if _core_graphics is None:
+            lib_path = ctypes.util.find_library("CoreGraphics")
+            if lib_path:
+                _core_graphics = ctypes.cdll.LoadLibrary(lib_path)
+                _core_graphics.CGEventCreate.restype = ctypes.c_void_p
+                _core_graphics.CGEventGetLocation.restype = _CGPoint
+                _core_graphics.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+
+        if _core_graphics:
+            event = _core_graphics.CGEventCreate(None)
+            if event:
+                pt = _core_graphics.CGEventGetLocation(event)
+                return int(pt.x), int(pt.y)
+    except Exception as e:
+        print(f"⚠️ Error reading mouse location: {e}")
+    return None, None
+
+def capture_screen(mode="cursor", crop_w=1280, crop_h=800):
+    """
+    Captures screen content.
+    - mode='cursor': Captures a crisp 1280x800 crop centered directly around the mouse cursor.
+    - mode='full': Captures full desktop and downscales to max 1280px via sips.
+    Returns (base64_jpeg_string, cursor_info_dict).
+    """
+    try:
+        cursor_info = None
+        if mode == "cursor":
+            mx, my = get_mouse_location()
+            if mx is not None and my is not None:
+                rx = max(0, mx - crop_w // 2)
+                ry = max(0, my - crop_h // 2)
+                cmd = ["screencapture", "-x", "-t", "jpg", f"-R{rx},{ry},{crop_w},{crop_h}", SCREENSHOT_PATH]
+                subprocess.run(cmd, check=True, capture_output=True)
+                cursor_info = {
+                    "global_x": mx,
+                    "global_y": my,
+                    "crop_x": rx,
+                    "crop_y": ry,
+                    "rel_x": mx - rx,
+                    "rel_y": my - ry,
+                    "width": crop_w,
+                    "height": crop_h,
+                    "mode": "cursor"
+                }
+            else:
+                mode = "full"
+
+        if mode == "full":
+            subprocess.run(["screencapture", "-x", "-t", "jpg", SCREENSHOT_PATH], check=True, capture_output=True)
+            subprocess.run(["sips", "-Z", "1280", SCREENSHOT_PATH], capture_output=True)
+            cursor_info = {"mode": "full"}
+
         if os.path.exists(SCREENSHOT_PATH) and os.path.getsize(SCREENSHOT_PATH) > 0:
             with open(SCREENSHOT_PATH, "rb") as f:
                 img_data = f.read()
-            return base64.b64encode(img_data).decode("utf-8")
+            return base64.b64encode(img_data).decode("utf-8"), cursor_info
     except Exception as e:
         print(f"⚠️ Error capturing screen: {e}")
-    return None
+    return None, None
 
 def query_smriti_recall(query, limit=4):
     """Recalls relevant memories from SMRITI API."""
@@ -198,7 +255,15 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/capture":
-            b64 = capture_screen()
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = {}
+            if content_length > 0:
+                try:
+                    body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+            mode = body.get("mode", "cursor")
+            b64, cursor_info = capture_screen(mode=mode)
             self.send_response(200 if b64 else 500)
             self.send_header("Content-Type", "application/json")
             self.send_cors_headers()
@@ -206,7 +271,8 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "status": "ok" if b64 else "error",
                 "has_image": b64 is not None,
-                "image_data": f"data:image/jpeg;base64,{b64}" if b64 else None
+                "image_data": f"data:image/jpeg;base64,{b64}" if b64 else None,
+                "cursor_info": cursor_info
             }).encode("utf-8"))
 
         elif self.path == "/api/chat":
@@ -218,9 +284,11 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 body = {}
 
             prompt = body.get("prompt", "").strip()
-            model = body.get("model", "qwen3.5:latest")
+            model = body.get("model", "mistral:latest")
             include_screen = body.get("include_screen", True)
+            capture_mode = body.get("capture_mode", "cursor")
             image_b64 = body.get("image_b64")
+            cursor_info = body.get("cursor_info")
 
             if not prompt:
                 self.send_response(400)
@@ -232,7 +300,7 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
 
             # Capture screen if requested and not provided manually
             if include_screen and not image_b64:
-                image_b64 = capture_screen()
+                image_b64, cursor_info = capture_screen(mode=capture_mode)
 
             # Recall from SMRITI
             memories = query_smriti_recall(prompt, limit=4)
@@ -242,6 +310,15 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                     [f"- {m.get('content', '')}" for m in memories]
                 )
 
+            # Spatial cursor context
+            cursor_context = ""
+            if cursor_info and cursor_info.get("mode") == "cursor":
+                cursor_context = (
+                    f"\n[Cursor Spatial Awareness: The attached image is a 1280x800 crop centered directly around the user's mouse cursor. "
+                    f"The cursor was positioned at relative pixel ({cursor_info.get('rel_x')}, {cursor_info.get('rel_y')}). "
+                    f"Pay particular attention to the text, code, or UI elements immediately adjacent to the cursor.]\n"
+                )
+
             now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
             system_prompt = (
                 f"You are Clicky, a friendly, intelligent AI companion with persistent long-term memory via SMRITI.\n"
@@ -249,7 +326,7 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 f"You can see what the user is working on if a screen capture is attached.\n"
                 f"Be direct, insightful, and clear. If referring to code or visual elements on screen, describe them precisely.\n"
                 f"Keep responses conversational and readable."
-            ) + recalled_context
+            ) + cursor_context + recalled_context
 
             try:
                 reply = query_ollama(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
@@ -257,14 +334,16 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                     reply = "I received your message, but didn't get a response from the model. Make sure Ollama is running."
 
                 # Encode exchange to SMRITI
-                encode_text = f"User asked: {prompt}\nClicky answered: {reply[:300]}"
+                spatial_tag = f" [Cursor at ({cursor_info['global_x']}, {cursor_info['global_y']})]" if (cursor_info and "global_x" in cursor_info) else ""
+                encode_text = f"User asked: {prompt}{spatial_tag}\nClicky answered: {reply[:300]}"
                 encode_smriti_memory(encode_text, modality="text")
 
                 response_data = {
                     "reply": reply,
                     "model": model,
                     "recalled_memories": memories,
-                    "has_screenshot": image_b64 is not None
+                    "has_screenshot": image_b64 is not None,
+                    "cursor_info": cursor_info
                 }
 
                 self.send_response(200)

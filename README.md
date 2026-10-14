@@ -28,7 +28,8 @@ This single command:
 
 - **⏹️ Instant Speech Stop Control**: Never worry about AI talking non-stop. Hit **`Esc`** at any moment or click the prominent red **`⏹️ Stop Speaking`** button to immediately silence speech via `window.speechSynthesis.cancel()`.
 - **🔊 Voice Toggle**: Switch voice output on or off with a single click.
-- **📷 Native Screen Awareness**: Automatically captures your active desktop silently via macOS's native `screencapture` CLI, downscaled via `sips` to optimize vision token compute. No TCC permission loops or modal crashes.
+- **🎯 Cursor-Centered Auto-Crop Perception**: Real-time foveal vision! Clicky automatically queries your macOS mouse cursor location and captures a crisp 1280×800 crop centered directly around where you're pointing. Injects relative spatial coordinates into the vision prompt and encodes spatial awareness into SMRITI. No TCC permission loops or modal crashes.
+- **📷 Full Desktop Fallback**: Toggle between Cursor-Centered Auto-Crop and Full Desktop capture with a single click.
 - **🧠 SMRITI Long-Term Memory**: Shared local memory layer (`~/.smriti/global`) connecting Clicky, Smriti Desktop App, Claude Code, Gemini CLI, and terminal agents. Every conversation turn is encoded into your memory palace and recalled in future conversations.
 - **🎙️ Web Speech Dictation**: Click the **`🎙️`** microphone button to speak with real-time live transcription.
 - **🦙 Zero API Keys via Ollama**: Runs entirely on your Mac using local models:

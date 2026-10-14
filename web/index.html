@@ -611,7 +611,18 @@
         </label>
         <button class="snap-btn" onclick="captureNewScreen()" title="Snap updated screen image">📷 Snap</button>
       </div>
-      <img id="screenThumb" class="screen-thumb" src="/api/screenshot" alt="Screen preview" onclick="openLightbox()" title="Click to view full screen capture" onerror="this.style.display='none'">
+      <div style="display: flex; gap: 4px; font-size: 11px;">
+        <select id="captureModeSelect" class="snap-btn" style="width: 100%; padding: 4px 6px; font-size: 11px; cursor: pointer;" onchange="onCaptureModeChange()">
+          <option value="cursor">🎯 Cursor Auto-Crop (1280x800)</option>
+          <option value="full">🖥️ Full Desktop</option>
+        </select>
+      </div>
+      <div style="position: relative;">
+        <img id="screenThumb" class="screen-thumb" src="/api/screenshot" alt="Screen preview" onclick="openLightbox()" title="Click to view full screen capture" onerror="this.style.display='none'">
+        <div id="cursorBadge" style="position: absolute; bottom: 6px; left: 6px; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); color: #60a5fa; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3); pointer-events: none;">
+          🎯 Cursor Auto-Crop
+        </div>
+      </div>
     </div>
 
     <!-- Chat Stream -->
@@ -780,14 +791,30 @@
       }
     });
 
+    function onCaptureModeChange() {
+      const mode = document.getElementById("captureModeSelect").value;
+      const badge = document.getElementById("cursorBadge");
+      if (mode === "cursor") {
+        badge.textContent = "🎯 Cursor Auto-Crop";
+      } else {
+        badge.textContent = "🖥️ Full Desktop";
+      }
+    }
+
     // Screen Capture
     async function captureNewScreen() {
       const snapBtn = document.querySelector(".snap-btn");
       snapBtn.textContent = "Capturing...";
+      const mode = document.getElementById("captureModeSelect").value;
       try {
-        const res = await fetch("/api/capture", { method: "POST" });
+        const res = await fetch("/api/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: mode })
+        });
         if (res.ok) {
-          refreshScreenThumb();
+          const data = await res.json();
+          refreshScreenThumb(data.cursor_info);
         }
       } catch (e) {
         console.error("Capture error:", e);
@@ -796,11 +823,20 @@
       }
     }
 
-    function refreshScreenThumb() {
+    function refreshScreenThumb(cursorInfo) {
       const thumb = document.getElementById("screenThumb");
       thumb.src = "/api/screenshot?t=" + Date.now();
       thumb.style.display = "block";
       document.getElementById("lightboxImg").src = "/api/screenshot?t=" + Date.now();
+
+      const badge = document.getElementById("cursorBadge");
+      if (cursorInfo && cursorInfo.mode === "cursor") {
+        badge.textContent = `🎯 (${cursorInfo.global_x}, ${cursorInfo.global_y})`;
+        badge.title = `Cursor centered at screen (${cursorInfo.global_x}, ${cursorInfo.global_y})`;
+      } else {
+        badge.textContent = "🖥️ Full Desktop";
+        badge.title = "Full desktop captured";
+      }
     }
 
     function openLightbox() {
@@ -984,29 +1020,31 @@
       container.scrollTop = container.scrollHeight;
 
       try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: json_payload = JSON.stringify({
-            prompt: text,
-            model: currentModel,
-            include_screen: includeScreen
-          })
-        });
+          const captureMode = document.getElementById("captureModeSelect").value;
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: json_payload = JSON.stringify({
+              prompt: text,
+              model: currentModel,
+              include_screen: includeScreen,
+              capture_mode: captureMode
+            })
+          });
 
-        // Remove loading row
-        const row = document.getElementById("loadingRow");
-        if (row) row.remove();
+          // Remove loading row
+          const row = document.getElementById("loadingRow");
+          if (row) row.remove();
 
-        if (res.ok) {
-          const data = await res.json();
-          appendMessage("assistant", data.reply, data.recalled_memories);
-          speakText(data.reply);
-          if (data.has_screenshot) {
-            refreshScreenThumb();
-          }
-          // Refresh SMRITI count
-          loadStatus();
+          if (res.ok) {
+            const data = await res.json();
+            appendMessage("assistant", data.reply, data.recalled_memories);
+            speakText(data.reply);
+            if (data.has_screenshot) {
+              refreshScreenThumb(data.cursor_info);
+            }
+            // Refresh SMRITI count
+            loadStatus();
         } else {
           const err = await res.json();
           appendMessage("assistant", `⚠️ Error: ${err.error || "Failed to get response"}`);
