@@ -37,10 +37,11 @@ This single command:
 - **📷 Full Desktop Fallback**: Toggle between Cursor-Centered Auto-Crop and Full Desktop capture with a single click.
 - **🧠 SMRITI Long-Term Memory**: Shared local memory layer (`~/.smriti/global`) connecting Clicky, Smriti Desktop App, Claude Code, Gemini CLI, and terminal agents. Every conversation turn is encoded into your memory palace and recalled in future conversations.
 - **🎙️ Web Speech Dictation**: Click the **`🎙️`** microphone button to speak with real-time live transcription.
-- **🦙 Zero API Keys via Ollama**: Runs entirely on your Mac using local models:
-  - **`mistral:latest`** (Default — ultra-fast text chat)
-  - **`qwen3.5:latest`** (Multimodal vision chat for inspecting screen contents)
-  - Any custom model in your local Ollama library.
+- **🦙 Local First + 🌐 Cloud APIs**: Works 100% locally by default with Ollama, or connect directly to online models by clicking **`⚙️ API Keys`** in the top bar:
+  - **Anthropic Claude**: `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022`, `claude-3-opus-20240229`
+  - **Google Gemini**: `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash`
+  - **OpenAI**: `gpt-4o`, `gpt-4o-mini`
+  - Keys are saved locally on your Mac (`~/.clicky_keys.json`) with restricted permissions (`0600`) and never transmitted to third parties.
 
 ---
 

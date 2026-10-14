@@ -279,6 +279,177 @@ def encode_smriti_memory(content, modality="text"):
         print(f"⚠️ Smriti encode warning: {e}")
         return None
 
+KEYS_FILE = Path.home() / ".clicky_keys.json"
+
+def get_api_keys():
+    """Returns stored API keys from environment variables or ~/.clicky_keys.json."""
+    keys = {
+        "anthropic": os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+        "gemini": os.environ.get("GEMINI_API_KEY", "").strip(),
+        "openai": os.environ.get("OPENAI_API_KEY", "").strip()
+    }
+    if KEYS_FILE.exists():
+        try:
+            with open(KEYS_FILE, "r") as f:
+                data = json.load(f)
+                for provider in ["anthropic", "gemini", "openai"]:
+                    if data.get(provider) and not keys[provider]:
+                        keys[provider] = data[provider].strip()
+        except Exception as e:
+            print(f"⚠️ Error reading keys file: {e}")
+    return keys
+
+def save_api_keys(new_keys):
+    """Saves API keys to ~/.clicky_keys.json with restricted 0600 permissions."""
+    current = {}
+    if KEYS_FILE.exists():
+        try:
+            with open(KEYS_FILE, "r") as f:
+                current = json.load(f)
+        except Exception:
+            current = {}
+    for provider, key in new_keys.items():
+        if key is not None:
+            clean = str(key).strip()
+            if clean:
+                current[provider] = clean
+            elif provider in current and clean == "":
+                del current[provider]
+    try:
+        with open(KEYS_FILE, "w") as f:
+            json.dump(current, f, indent=2)
+        os.chmod(KEYS_FILE, 0o600)
+    except Exception as e:
+        print(f"⚠️ Error saving keys file: {e}")
+    return get_api_keys()
+
+def mask_key(key):
+    if not key or len(key) < 8:
+        return ""
+    return key[:6] + "..." + key[-4:]
+
+def query_anthropic(model, system_prompt, user_prompt, image_b64=None, api_key=None):
+    """Sends chat completion request to Anthropic Messages API."""
+    if not api_key:
+        api_key = get_api_keys().get("anthropic")
+    if not api_key:
+        raise ValueError("Anthropic API key is not configured. Click ⚙️ API Keys in the top bar to add your key.")
+
+    content_blocks = []
+    if image_b64:
+        content_blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": image_b64
+            }
+        })
+    content_blocks.append({"type": "text", "text": user_prompt})
+
+    payload = {
+        "model": model,
+        "max_tokens": 1500,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": content_blocks}
+        ]
+    }
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        content_list = data.get("content", [])
+        return "".join([c.get("text", "") for c in content_list if c.get("type") == "text"])
+
+def query_gemini(model, system_prompt, user_prompt, image_b64=None, api_key=None):
+    """Sends chat completion request to Google Gemini API."""
+    if not api_key:
+        api_key = get_api_keys().get("gemini")
+    if not api_key:
+        raise ValueError("Google Gemini API key is not configured. Click ⚙️ API Keys in the top bar to add your key.")
+
+    parts = []
+    if image_b64:
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": image_b64
+            }
+        })
+    parts.append({"text": user_prompt})
+
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 1500
+        }
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            return "".join([p.get("text", "") for p in parts])
+        return ""
+
+def query_openai(model, system_prompt, user_prompt, image_b64=None, api_key=None):
+    """Sends chat completion request to OpenAI API."""
+    if not api_key:
+        api_key = get_api_keys().get("openai")
+    if not api_key:
+        raise ValueError("OpenAI API key is not configured. Click ⚙️ API Keys in the top bar to add your key.")
+
+    content_blocks = []
+    if image_b64:
+        content_blocks.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+        })
+    content_blocks.append({"type": "text", "text": user_prompt})
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content_blocks}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1500
+    }
+
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return ""
+
 def get_ollama_models():
     """Gets available models from local Ollama."""
     try:
@@ -373,6 +544,7 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+            keys = get_api_keys()
             data = {
                 "ollama_running": len(models) > 0,
                 "models": models,
@@ -381,7 +553,28 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
                 "has_screenshot": os.path.exists(SCREENSHOT_PATH),
                 "gesture_enabled": gesture_enabled,
                 "last_circle_capture_time": last_circle_capture_time,
-                "last_cursor_info": last_cursor_info
+                "last_cursor_info": last_cursor_info,
+                "has_anthropic": bool(keys.get("anthropic")),
+                "has_gemini": bool(keys.get("gemini")),
+                "has_openai": bool(keys.get("openai"))
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode("utf-8"))
+
+        elif clean_path == "/api/keys":
+            keys = get_api_keys()
+            data = {
+                "has_anthropic": bool(keys.get("anthropic")),
+                "has_gemini": bool(keys.get("gemini")),
+                "has_openai": bool(keys.get("openai")),
+                "masked": {
+                    "anthropic": mask_key(keys.get("anthropic", "")),
+                    "gemini": mask_key(keys.get("gemini", "")),
+                    "openai": mask_key(keys.get("openai", ""))
+                }
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -426,6 +619,33 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             self.send_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps({"gesture_enabled": gesture_enabled}).encode("utf-8"))
+
+        elif self.path == "/api/keys":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = {}
+            if content_length > 0:
+                try:
+                    body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+            save_api_keys(body.get("keys", {}))
+            keys = get_api_keys()
+            data = {
+                "status": "ok",
+                "has_anthropic": bool(keys.get("anthropic")),
+                "has_gemini": bool(keys.get("gemini")),
+                "has_openai": bool(keys.get("openai")),
+                "masked": {
+                    "anthropic": mask_key(keys.get("anthropic", "")),
+                    "gemini": mask_key(keys.get("gemini", "")),
+                    "openai": mask_key(keys.get("openai", ""))
+                }
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode("utf-8"))
 
         elif self.path == "/api/capture":
             content_length = int(self.headers.get("Content-Length", 0))
@@ -502,9 +722,17 @@ class ClickyWebHandler(BaseHTTPRequestHandler):
             ) + cursor_context + recalled_context
 
             try:
-                reply = query_ollama(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
-                if not reply:
-                    reply = "I received your message, but didn't get a response from the model. Make sure Ollama is running."
+                # Dispatch to appropriate provider
+                if model.startswith("claude-"):
+                    reply = query_anthropic(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
+                elif model.startswith("gemini-"):
+                    reply = query_gemini(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
+                elif model.startswith("gpt-"):
+                    reply = query_openai(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
+                else:
+                    reply = query_ollama(model=model, system_prompt=system_prompt, user_prompt=prompt, image_b64=image_b64)
+                    if not reply:
+                        reply = "I received your message, but didn't get a response from the model. Make sure Ollama is running."
 
                 # Encode exchange to SMRITI
                 spatial_tag = f" [Cursor at ({cursor_info['global_x']}, {cursor_info['global_y']})]" if (cursor_info and "global_x" in cursor_info) else ""
